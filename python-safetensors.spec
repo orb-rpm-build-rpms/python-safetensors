@@ -20,9 +20,14 @@ Source:		%{pypi_source safetensors}
 # Patch the bindings crate to use the upstream crate, rather than the bundled crate sources
 Patch:		pysafetensors.patch
 
+# Exclude i686 because rust-safetensors does
+ExcludeArch:	%{ix86}
 # Right now, torch is exclusive to x86_64 and aarch64
-# TODO: Exclude the torch extras on other arches
-ExclusiveArch:	x86_64 aarch64
+%ifarch x86_64 || arch aarch64
+%bcond_without torch
+%else
+%bcond_with torch
+%endif
 
 BuildRequires:	python3-devel
 BuildRequires:	gcc
@@ -41,7 +46,11 @@ Summary:	%{summary}
 
 %description -n python3-safetensors %_description
 
+%if %{with torch}
 %pyproject_extras_subpkg -n python3-safetensors numpy,torch
+%else
+%pyproject_extras_subpkg -n python3-safetensors numpy
+%endif
 
 
 %prep
@@ -59,10 +68,18 @@ rm py_src/safetensors/flax.py
 rm py_src/safetensors/mlx.py
 rm py_src/safetensors/paddle.py
 rm py_src/safetensors/tensorflow.py
+%if %{without torch}
+rm py_src/safetensors/torch.py
+%endif
 # Also remove test cases that require unpackaged dependencies
 # TODO: Should probably submit an upstream bug to skip these automatically if deps are missing
 rm bindings/python/tests/test_flax_comparison.py
 rm bindings/python/tests/test_tf_comparison.py
+%if %{without torch}
+rm bindings/python/tests/test_pt_comparison.py
+rm bindings/python/tests/test_pt_model.py
+rm bindings/python/tests/test_simple.py
+%endif
 
 
 %generate_buildrequires
@@ -70,7 +87,11 @@ rm bindings/python/tests/test_tf_comparison.py
 cd bindings/python/
 %cargo_generate_buildrequires
 cd ../../
+%if %{with torch}
 %pyproject_buildrequires -x numpy,torch
+%else
+%pyproject_buildrequires -x numpy
+%endif
 
 %build
 %pyproject_wheel

@@ -26,6 +26,13 @@ SourceLicense:  Apache-2.0
 URL:            https://github.com/huggingface/safetensors
 Source:         %{url}/archive/refs/tags/v%{version}/safetensors-%{version}.tar.gz
 
+# feat: bump pyo3 to 0.29 (#796)
+# https://github.com/safetensors/safetensors/commit/b3d8d72f341daa219b7a6c7e9e7335f5a14348a4
+# Without changes to .github/workflows/python.yml or to
+# bindings/python/Cargo.lock, which are not relevant here and are more likely
+# to produce conflicts.
+Patch:          safetensors-0.8.0-pyo3-0.29.patch
+
 BuildRequires:  python3-devel
 BuildRequires:  cargo-rpm-macros >= 24
 BuildRequires:  rust2rpm-helper

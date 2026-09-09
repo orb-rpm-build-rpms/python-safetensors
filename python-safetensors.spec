@@ -34,6 +34,10 @@ Source1:        safetensors-%{version}-vendor.tar.xz
 
 BuildRequires:  python3-devel
 BuildRequires:  cargo-rpm-macros >= 24
+# Test requirements
+BuildRequires:  python3dist(pytest)
+# https://github.com/huggingface/safetensors/pull/640
+BuildRequires:  python3dist(fsspec)
 
 # Exclude i686 because rust-safetensors does
 ExcludeArch:    %{ix86}
@@ -108,11 +112,7 @@ cd ../..
 
 %check
 cd bindings/python/
-# Build-time smoke test: import the module. The Rust test suite (cargo test)
-# and the Python pytest suite are intentionally not run here -- the offline
-# vendored build already compiles the extension, and the pytest suite pulls
-# heavy optional frameworks. Omit submodules that require unpackaged extras /
-# optional accelerator backends.
+# Omit submodules that require unpackaged extras / optional dependencies
 %{pyproject_check_import %{shrink:
     --exclude 'safetensors.flax'
     --exclude 'safetensors.mlx'
@@ -120,6 +120,26 @@ cd bindings/python/
     --exclude 'safetensors.tensorflow'
     %{?!with_torch:--exclude 'safetensors.torch'}
     } }
+# Test both the rust part of the bindings and the Python parts. The Rust deps
+# (including dev-deps) come from the vendored tree, so this runs fully offline.
+%cargo_test
+# But only run the tests/ and not benches/ in Python
+# Ignore tests that require unpackaged extras / optional dependencies
+%if %{without torch}
+ignore="${ignore-} --ignore=tests/test_multithreaded.py"
+ignore="${ignore-} --ignore=tests/test_pread_backend.py"
+ignore="${ignore-} --ignore=tests/test_pt_comparison.py"
+ignore="${ignore-} --ignore=tests/test_pt_model.py"
+ignore="${ignore-} --ignore=tests/test_simple.py"
+%endif
+ignore="${ignore-} --ignore=tests/test_flax_comparison.py"
+ignore="${ignore-} --ignore=tests/test_tf_comparison.py"
+%ifarch s390x
+# On s390x architecture, test_serialize_file_releases_gil fails
+# https://github.com/safetensors/safetensors/issues/812
+ignore="${ignore-} --ignore=tests/test_threadable.py"
+%endif
+%pytest ${ignore-} tests/
 cd ../..
 
 

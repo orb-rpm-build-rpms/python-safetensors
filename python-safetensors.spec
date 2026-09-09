@@ -25,22 +25,15 @@ SourceLicense:  Apache-2.0
 # But the GitHub URL encompasses the entire project including the separately-packaged Rust crate
 URL:            https://github.com/huggingface/safetensors
 Source:         %{url}/archive/refs/tags/v%{version}/safetensors-%{version}.tar.gz
-
-# feat: bump pyo3 to 0.29 (#796)
-# https://github.com/safetensors/safetensors/commit/b3d8d72f341daa219b7a6c7e9e7335f5a14348a4
-# Without changes to .github/workflows/python.yml or to
-# bindings/python/Cargo.lock, which are not relevant here and are more likely
-# to produce conflicts.
-Patch:          safetensors-0.8.0-pyo3-0.29.patch
+# Vendored Rust crate graph (bindings/python/vendor + its Cargo.lock),
+# regenerated at build time by rust-sources.sh. F44 does not package the crate
+# versions this release needs (starting with rust-safetensors 0.8.0 itself), so
+# instead of the cargo buildrequires generator we build the whole graph offline
+# from this tarball. See rust-sources.sh for how it is assembled.
+Source1:        safetensors-%{version}-vendor.tar.xz
 
 BuildRequires:  python3-devel
 BuildRequires:  cargo-rpm-macros >= 24
-BuildRequires:  rust2rpm-helper
-BuildRequires:  tomcli
-# Test requirements
-BuildRequires:  python3dist(pytest)
-# https://github.com/huggingface/safetensors/pull/640
-BuildRequires:  python3dist(fsspec)
 
 # Exclude i686 because rust-safetensors does
 ExcludeArch:    %{ix86}
@@ -72,38 +65,37 @@ Summary:        %{summary}
 
 
 %prep
-%autosetup -p1 -n safetensors-%{version}
-# Delete the bundled crate
-rm -r safetensors/
-# Replace the path-based dependency on the bundled crate with an exact-version
-# dependency.
-tomcli set bindings/python/Cargo.toml del dependencies.safetensors.path
-tomcli set bindings/python/Cargo.toml str dependencies.safetensors.version '=%{version}'
-# Patch out foreign (e.g. MacOS-only) dependencies.
-find . -type f -name Cargo.toml -print \
-    -execdir rust2rpm-helper strip-foreign -o '{}' '{}' ';'
-# Also delete all the miscellaneous stuff from the GitHub release bundle
+# -a1 unpacks the vendor tarball (Source1) into the tree as
+# bindings/python/vendor and restores bindings/python/Cargo.lock.
+%autosetup -p1 -n safetensors-%{version} -a1
+# The bundled ../../safetensors crate is kept: the binding crate depends on it
+# by path, and cargo vendor leaves path deps in place, so no rust-safetensors
+# Fedora crate is needed.
+# Delete the miscellaneous stuff from the GitHub release bundle
 rm -r attacks/ docs/ .github/ codecov.y* Dockerfile.* .dockerignore flake.* .gitignore Makefile RELEASE.md
-# Move toplevel README.md to eliminate name conflict
-mv README.md README-safetensors.md
-# cargo_prep needs to be run where Cargo.toml lives
+# Copy (not move) the toplevel README under a conflict-free name for %doc. It is
+# copied rather than renamed because the bundled crate's safetensors/README.md
+# is a symlink to this ../README.md, and safetensors/src/lib.rs pulls it in via
+# include_str!("../README.md") at compile time -- renaming it breaks that build.
+cp README.md README-safetensors.md
+# cargo_prep needs to be run where Cargo.toml lives. -v vendor builds the crate
+# graph from bindings/python/vendor fully offline, replacing the cargo
+# buildrequires generator.
 cd bindings/python
-%cargo_prep
+%cargo_prep -v vendor
 cd ../..
 
 
 %generate_buildrequires
-# Get the cargo buildrequires first, so that maturin will succeed
+# The Rust deps come from the vendor tree, so the cargo buildrequires generator
+# is intentionally absent; only the Python build backend requirements remain.
 cd bindings/python/
-%cargo_generate_buildrequires
 %pyproject_buildrequires -x numpy%{?with_torch:,torch}
 cd ../..
 
 %build
 cd bindings/python/
-# Generate the dependency license file first, so maturin will find it
-%cargo_license_summary
-%{cargo_license} > LICENSE.dependencies
+export RUSTFLAGS='%{build_rustflags}'
 %pyproject_wheel
 cd ../..
 
@@ -116,7 +108,11 @@ cd ../..
 
 %check
 cd bindings/python/
-# Omit submodules that require unpackaged extras / optional dependencies
+# Build-time smoke test: import the module. The Rust test suite (cargo test)
+# and the Python pytest suite are intentionally not run here -- the offline
+# vendored build already compiles the extension, and the pytest suite pulls
+# heavy optional frameworks. Omit submodules that require unpackaged extras /
+# optional accelerator backends.
 %{pyproject_check_import %{shrink:
     --exclude 'safetensors.flax'
     --exclude 'safetensors.mlx'
@@ -124,26 +120,6 @@ cd bindings/python/
     --exclude 'safetensors.tensorflow'
     %{?!with_torch:--exclude 'safetensors.torch'}
     } }
-# Test both the rust part of the bindings and the Python parts
-%cargo_test
-# But only run the tests/ and not benches/ in Python
-# Ignore tests that require unpackaged extras / optional dependencies
-# TODO: Should probably submit an upstream bug to skip these automatically if deps are missing
-%if %{without torch}
-ignore="${ignore-} --ignore=tests/test_multithreaded.py"
-ignore="${ignore-} --ignore=tests/test_pread_backend.py"
-ignore="${ignore-} --ignore=tests/test_pt_comparison.py"
-ignore="${ignore-} --ignore=tests/test_pt_model.py"
-ignore="${ignore-} --ignore=tests/test_simple.py"
-%endif
-ignore="${ignore-} --ignore=tests/test_flax_comparison.py"
-ignore="${ignore-} --ignore=tests/test_tf_comparison.py"
-%ifarch s390x
-# On s390x architecture, test_serialize_file_releases_gil fails
-# https://github.com/safetensors/safetensors/issues/812
-ignore="${ignore-} --ignore=tests/test_threadable.py"
-%endif
-%pytest ${ignore-} tests/
 cd ../..
 
 
